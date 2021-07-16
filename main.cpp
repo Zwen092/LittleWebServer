@@ -198,7 +198,7 @@ int main(int argc, char const *argv[])
                 users_timer[connfd].sockfd = connfd;
 
                 //创建定时器临时变量
-                util_timer* timer = new util_timer;
+                util_timer *timer = new util_timer;
 
                 //设置定时器对应的连接资源
                 timer->user_data = &users_timer[connfd];
@@ -213,10 +213,9 @@ int main(int argc, char const *argv[])
                 users_timer[connfd].timer = timer;
                 //add this timer to list
                 timer_lst.add_timer(timer);
-
             }
             //handle exception events
-            
+
             else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR))
             {
                 //服务器端关闭连接，移除对应的定时器
@@ -228,7 +227,7 @@ int main(int argc, char const *argv[])
                     timer_lst.del_timer(timer);
                 }
             }
-            
+
             //处理定时器信号
             else if ((sockfd == pipefd[0]) && (events[i].events & EPOLLIN))
             {
@@ -244,18 +243,52 @@ int main(int argc, char const *argv[])
                 {
                     //若监测到读事件，将该事件放入请求队列
                     pool->append(users + sockfd);
-                }
-            }
-            else if (events[i].events & EPOLLOUT)
-            {
-                /* when writable events happen in this sockfd, epoll wait calls the main thread. The main thread write the result of the server process the client request to socket */
-                if (users[sockfd].write())
-                {
-                    /* .. */
+
+                    //若有数据传输，则将定时器往后延迟3个单位
+                    //对其在链表上的位置进行调整
+                    if (timer)
+                    {
+                        timer_t cur = time(NULL);
+                        timer->expire = cur + 3 * TIMESLOT;
+                        timer_lst.adjust_timer(timer);
+                    }
                 }
                 else
                 {
-                    /* .. */
+                    //if not
+                    //服务器端关闭连接，移除对应的定时器
+                    cb_func(&users_timer[sockfd]);
+                    if (timer)
+                    {
+                        timer_lst.del_timer(timer);
+                    }
+                }
+            }
+            //write event happens
+            else if (events[i].events & EPOLLOUT)
+            {
+                util_timer *timer = users_timer[sockfd].timer;
+                if (users[sockfd].write())
+                {
+                    //若有数据传输，则将定时器往后延迟3个单位
+                    //对其在链表上的位置进行调整
+                    if (timer)
+                    {
+                        time_t cur = time(NULL);
+                        timer->expire = cur + 3 * TIMESLOT;
+                        timer_lst.adjust_timer(timer);
+                    }
+                }
+                else
+                {
+                    //服务器端关闭连接，移除对应的定时器
+                    cb_func(&users_timer[sockfd]);
+                    if (timer)
+                    {
+                        time_t cur = time(NULL);
+                        timer->expire = cur + 3 * TIMESLOT;
+                        timer_lst.adjust_timer(timer);
+                    }
                 }
             }
             else if ((sockfd = pipefd[0]) && (events[i].events & EPOLLIN))
@@ -295,6 +328,13 @@ int main(int argc, char const *argv[])
                     }
                 }
             }
+        }
+        //处理定时器为非必须事件，收到信号并不是立马处理
+        //完成读写事件后，再进行处理
+        if (timeout)
+        {
+            timer_handler();
+            timeout = false;
         }
     }
 }
