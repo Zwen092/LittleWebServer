@@ -28,6 +28,36 @@ const char *doc_root = "/Users/wenzheng/Desktop/study/basic/webserver/TinyWebSer
 map<string, string> users;
 locker m_lock;
 
+void http_conn::initmysql_result(connection_pool *connPool)
+{
+    //先从连接池中取一个连接
+    MYSQL *mysql = NULL;
+    connectionRAII mysqlcon(&mysql, connPool);
+
+    //在user表中检索username，passwd数据，浏览器端输入
+    if (mysql_query(mysql, "SELECT username,passwd FROM user"))
+    {
+        LOG_ERROR("SELECT error:%s\n", mysql_error(mysql));
+    }
+
+    //从表中检索完整的结果集
+    MYSQL_RES *result = mysql_store_result(mysql);
+
+    //返回结果集中的列数
+    int num_fields = mysql_num_fields(result);
+
+    //返回所有字段结构的数组
+    MYSQL_FIELD *fields = mysql_fetch_field(result);
+
+    //从结果集中获取下一行，将对应的用户名和密码，存入map中
+    while (MYSQL_ROW row = mysql_fetch_row(result))
+    {
+        string temp1(row[0]);
+        string temp2(row[1]);
+        users[temp1] = temp2;
+    }
+}
+
 //循环读取客户数据，直到无数据可读或对方关闭连接
 bool http_conn::read_once()
 {
@@ -371,12 +401,87 @@ http_conn::HTTP_CODE http_conn::do_request()
     if (cgi == 1 && (*(p + 1) == '2' || *(p + 1) == '3'))
     {
         //根据标志判断是登录检测还是注册检测
+        char flag = m_url[1];
+
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/");
+        strcat(m_url_real, murl + 2);
+        strncpy(m_real_file + len, m_url_real, FILENAME_LEN - len - 1);
+        free(m_url_real);
+
+        //将用户名和密码提取出来
+        //user=123&passwd=123
+        char name[100], password[100];
+        int i;
+        //以&为分隔符，前面的为用户名
+        for (i = 5; m_string[i] != '&'; i++)
+        {
+            name[i - 5] = m_string[i];
+        }
+        name[i - 5] = '\0';
+
+        //以&为分隔符，后面的是密码
+        int j = 0 for (i = i + 10; m_string[i] != '\0'; i++, j++)
+        {
+            password[j] = m_string[i];
+        }
+        password[j] = '\0';
 
         //同步线程登录校验
+        if (*(p + 1) == '3')
+        {
+            //如果是注册，先检测数据库中是否有重名的
+            //没有重名的，进行增加数据
+            char *sql_insert = (char *)malloc(sizeof(char) * 200);
+            strcpy(sql_insert, "INSERT INTO user(username, passwd) VALUES(");
+            strcat(sql_insert, "'");
+            strcat(sql_insert, name);
+            strcat(sql_insert, "', '");
+            strcat(sql_insert, password);
+            strcat(sql_insert, "')");
 
-        //CGI多进程登录校验
+            //判断map中能否找到重复的用户名
+            if (users.find(name) == users.end)
+            {
+                //向数据库中插入数据时，需要通过锁来同步数据
+                m_lock.lock();
+                int res = mysql_query(mysql, sql_insert);
+
+                users.insert(pair<string, string>(name, password));
+                m_lock.unlock();
+
+                //校验成功，跳转登录页面
+                if (!res)
+                {
+                    strcpy(m_url, "/log.html");
+                }
+                else
+                {
+                    strcpy(m_url, "/registerError.html");
+                }
+            }
+            else
+            {
+                strcpy(m_url, "/registerError.html");
+            }
+        }
+
+        //如果是登录，直接判断
+        //若浏览器端输入的用户名和密码在表中可以查找到，返回1，否则返回0
+        else if (*(p + 1) == '2')
+        {
+            if (users.find(name) != users.end() && users[name] == password)
+            {
+                strcpy(m_url, "/welcome.html");
+            }
+            else
+            {
+                strcpy(m_url, "logError.html");
+            }
+        }
     }
 
+    //CGI多进程登录校验
     //如果请求资源为/0，表示跳转注册界面
     if (*(p + 1) == '0')
     {
@@ -399,10 +504,39 @@ http_conn::HTTP_CODE http_conn::do_request()
 
         free(m_url_real);
     }
+    //图片页面
+    else if (*(p + 1) == '5')
+    {
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/picture.html");
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+
+        free(m_url_real);
+    }
+    //视频页面
+    else if (*(p + 1) == '6')
+    {
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/video.html");
+        //what is this?
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+
+        free(m_url_real);
+    }
+    //关注页面
+    else if (*(p + 1) == '7')
+    {
+        char *m_url_real = (char *)malloc(sizeof(char) * 200);
+        strcpy(m_url_real, "/fans.html");
+        strncpy(m_real_file + len, m_url_real, strlen(m_url_real));
+
+        free(m_url_real);
+    }
     else
         //don't understand yet
         //如果以上均不符合，即不是登录和注册，直接将url与网站目录拼接
         //这里的情况是welcome界面，请求服务器上的一个图片
+        //v否则发送url实际请求的文件
         strncpy(m_real_file + len, m_url, FILENAME_LEN - len - 1);
 
     //通过stat获取请求资源文件信息，成功则将信息更新到m_file_stat结构体
@@ -643,28 +777,28 @@ bool http_conn::write()
             return false;
         }
 
-         //更新已发送字节数
-         bytes_to_send -= temp;
+        //更新已发送字节数
+        bytes_to_send -= temp;
 
-         //判断条件，数据已全部发送完
-         if (bytes_to_send <= 0)
-         {
-             unmap();
+        //判断条件，数据已全部发送完
+        if (bytes_to_send <= 0)
+        {
+            unmap();
 
-             //在epoll树上重置EPOLLONESHOT事件
-             modfd(m_epollfd, m_sockfd, EPOLLIN);
+            //在epoll树上重置EPOLLONESHOT事件
+            modfd(m_epollfd, m_sockfd, EPOLLIN);
 
-             //浏览器的请求为长连接
-             if (m_linger)
-             {
-                 //重新初始化HTTP对象
-                 init();
-                 return true;
-             }
-             else
-             {
-                 return false;
-             }
-         }
+            //浏览器的请求为长连接
+            if (m_linger)
+            {
+                //重新初始化HTTP对象
+                init();
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
     }
 }

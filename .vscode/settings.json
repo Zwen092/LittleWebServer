@@ -12,6 +12,7 @@
         "limits": "cpp",
         "ostream": "cpp",
         "sstream": "cpp",
-        "streambuf": "cpp"
+        "streambuf": "cpp",
+        "typeinfo": "cpp"
     }
 }
